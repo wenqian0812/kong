@@ -66,7 +66,7 @@ local postgres = {
       local out = {}
       table.insert(out, render([[
 
-        -- Add ws_id to $(TABLE), populating all of them with the default workspace id
+        -- Add ws_id to $(TABLE)
         DO $$
         BEGIN
           EXECUTE format('ALTER TABLE IF EXISTS ONLY "$(TABLE)" ADD "ws_id" UUID REFERENCES "workspaces" ("id") DEFAULT %L',
@@ -76,8 +76,15 @@ local postgres = {
         END;
         $$;
 
-        -- Reset default value for ws_id once it is populated
-        ALTER TABLE IF EXISTS ONLY "$(TABLE)" ALTER "ws_id" SET DEFAULT NULL;
+        -- Populate all ws_ids with the default workspace id
+        DO $$
+        BEGIN
+          EXECUTE format('UPDATE "$(TABLE)" SET "ws_id" = %L',
+                         (SELECT "id" FROM "workspaces" WHERE "name" = 'default'));
+        EXCEPTION WHEN DUPLICATE_COLUMN THEN
+          -- Do nothing, accept existing state
+        END;
+        $$;
 
       ]], { TABLE = table_name }))
 

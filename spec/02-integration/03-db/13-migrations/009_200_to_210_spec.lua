@@ -1,5 +1,6 @@
 local helpers = require "spec.helpers"
 local fmt = string.format
+local utils = require "kong.tools.utils"
 
 local PG_HAS_COLUMN_SQL = [[
   SELECT *
@@ -19,6 +20,13 @@ local PG_HAS_INDEX_SQL = [[
   SELECT *
   FROM pg_indexes
   WHERE indexname = '%s';
+]]
+
+local PG_HAS_TABLE_SQL = [[
+  SELECT *
+  FROM pg_catalog.pg_tables
+  WHERE schemaname = 'public'
+  AND tablename = '%s';
 ]]
 
 local function assert_pg_has_column(cn, table_name, column_name, data_type)
@@ -76,6 +84,25 @@ local function assert_not_pg_has_fkey(cn, table_name, column_name)
 end
 
 
+local function assert_pg_has_table(cn, table_name)
+  local res = assert(cn:query(fmt(PG_HAS_TABLE_SQL, table_name)))
+
+  assert.equals(1, #res)
+  assert.equals(table_name, res[1].tablename)
+end
+
+
+local function assert_not_pg_has_table(cn, table_name)
+  local res = assert(cn:query(fmt(PG_HAS_TABLE_SQL, table_name)))
+  assert.same({}, res)
+end
+
+
+local function assert_pg_table_has_ws_id(cn, table_name)
+  assert_pg_has_fkey(cn, table_name, "ws_id")
+end
+
+
 describe("#db migration core/009_200_to_210 spec", function()
   local _, db
 
@@ -114,37 +141,54 @@ describe("#db migration core/009_200_to_210 spec", function()
       assert_pg_has_fkey(cn, "upstreams", "client_certificate_id")
       assert_pg_has_index(cn, "upstreams_fkey_client_certificate")
     end)
+
+    it("adds workspaces table and index", function()
+      local cn = db.connector
+      assert_not_pg_has_table(cn, "workspaces")
+      assert_not_pg_has_index(cn, "workspaces_name_idx")
+
+      -- kong migrations up
+      assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
+
+      -- MIGRATING
+      assert_pg_has_table(cn, "workspaces")
+      assert_pg_has_index(cn, "workspaces_name_idx")
+    end)
+
+    it("creates default workspace, adds and sets ws_id in all core tables", function()
+      local cn = db.connector
+      assert_not_pg_has_fkey(cn, "upstreams", "ws_id")
+
+      -- BEFORE
+      -- kong migrations up
+      assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
+
+      local res = assert(cn:query(fmt([[
+        INSERT INTO upstreams(id, name, slots)
+        VALUES ('%s', 'test-upstream', 1);
+      ]], utils.uuid())))
+      assert.same({ affected_rows = 1 }, res)
+
+      -- MIGRATING
+      -- check default workspace exists and get its id
+      local res = assert(cn:query("SELECT * FROM workspaces"))
+      assert.equals(1, #res)
+      assert.equals("default", res[1].name)
+      assert.truthy(utils.is_valid_uuid(res[1].id))
+
+      local default_ws_id = res[1].id
+
+      assert_pg_has_fkey(cn, "upstreams", "ws_id")
+      local res = assert(cn:query([[
+        SELECT * FROM upstreams;
+      ]]))
+      assert.same(1, #res)
+      assert.equals("test-upstream", res[1].name)
+      assert.equals(default_ws_id, res[1].ws_id)
+    end)
   end)
 
-  --[[
-
-
-    local cn = db.connector
-    local res = assert(cn:query([[
-      SELECT *
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-      AND table_name     = 'routes'
-      AND column_name    = 'path_handling';
-    ))
-    assert.same({}, res)
-
-    -- kong migrations up
-    assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "007_140_to_150"))
-
-    res = assert(cn:query([[
-      SELECT *
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-      AND table_name     = 'routes'
-      AND column_name    = 'path_handling';
-    ))
-    assert.equals(1, #res)
-    assert.equals("routes", res[1].table_name)
-    assert.equals("path_handling", res[1].column_name)
-    -- migration has no `teardown` in postgres, no further tests needed
-  end)
-
+--[[
   it("#cassandra", function()
     local uuid = "c37d661d-7e61-49ea-96a5-68c34e83db3a"
 
