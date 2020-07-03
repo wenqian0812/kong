@@ -2,6 +2,8 @@ local helpers = require "spec.helpers"
 local fmt = string.format
 local utils = require "kong.tools.utils"
 
+local uuid = utils.uuid
+
 local PG_HAS_COLUMN_SQL = [[
   SELECT *
   FROM information_schema.columns
@@ -98,8 +100,30 @@ local function assert_not_pg_has_table(cn, table_name)
 end
 
 
-local function assert_pg_table_has_ws_id(cn, table_name)
-  assert_pg_has_fkey(cn, table_name, "ws_id")
+local function pg_insert(cn, table_name, tbl)
+  local columns, values = {},{}
+  for k,_ in pairs(tbl) do
+    columns[#columns + 1] = k
+  end
+  table.sort(columns)
+  for i, c in ipairs(columns) do
+    local v = tbl[c]
+    v = type(v) == "string" and "'" .. v .. "'" or v
+    values[i] = tostring(v)
+  end
+  local sql = fmt([[
+    INSERT INTO %s (%s) VALUES (%s)
+  ]],
+    table_name,
+    table.concat(columns, ","),
+    table.concat(values, ",")
+  )
+
+  local res = assert(cn:query(sql))
+
+  assert.same({ affected_rows = 1 }, res)
+
+  return assert(cn:query(fmt("SELECT * FROM %s WHERE id='%s'", table_name, tbl.id)))[1]
 end
 
 
@@ -142,10 +166,18 @@ describe("#db migration core/009_200_to_210 spec", function()
       assert_pg_has_index(cn, "upstreams_fkey_client_certificate")
     end)
 
-    it("adds workspaces table and index", function()
+    it("adds workspaces table, index and ws_id", function()
       local cn = db.connector
       assert_not_pg_has_table(cn, "workspaces")
       assert_not_pg_has_index(cn, "workspaces_name_idx")
+      assert_not_pg_has_fkey(cn, "upstreams", "ws_id")
+      assert_not_pg_has_fkey(cn, "targets", "ws_id")
+      assert_not_pg_has_fkey(cn, "consumers", "ws_id")
+      assert_not_pg_has_fkey(cn, "certificates", "ws_id")
+      assert_not_pg_has_fkey(cn, "snis", "ws_id")
+      assert_not_pg_has_fkey(cn, "services", "ws_id")
+      assert_not_pg_has_fkey(cn, "routes", "ws_id")
+      assert_not_pg_has_fkey(cn, "plugins", "ws_id")
 
       -- kong migrations up
       assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
@@ -153,21 +185,31 @@ describe("#db migration core/009_200_to_210 spec", function()
       -- MIGRATING
       assert_pg_has_table(cn, "workspaces")
       assert_pg_has_index(cn, "workspaces_name_idx")
+      assert_pg_has_fkey(cn, "upstreams", "ws_id")
+      assert_pg_has_fkey(cn, "targets", "ws_id")
+      assert_pg_has_fkey(cn, "consumers", "ws_id")
+      assert_pg_has_fkey(cn, "certificates", "ws_id")
+      assert_pg_has_fkey(cn, "snis", "ws_id")
+      assert_pg_has_fkey(cn, "services", "ws_id")
+      assert_pg_has_fkey(cn, "routes", "ws_id")
+      assert_pg_has_fkey(cn, "plugins", "ws_id")
     end)
 
-    it("creates default workspace, adds and sets ws_id in all core tables", function()
+    it("correctly handles ws_id", function()
       local cn = db.connector
-      assert_not_pg_has_fkey(cn, "upstreams", "ws_id")
-
       -- BEFORE
+      -- old node, there isn't even a ws_id column here
+      local u = pg_insert(cn, "upstreams", { id = uuid(), name = 'before-upstream', slots = 1 })
+      pg_insert(cn, "targets",   { id = uuid(), upstream_id = u.id, target = 'before-target', weight = 1 })
+      pg_insert(cn, "consumers", { id = uuid(), username = "before-consumer" })
+      local cc = pg_insert(cn, "certificates", { id = uuid(), cert = "before-cert", key = "key" })
+      pg_insert(cn, "snis", { id = uuid(), certificate_id = cc.id, name = "before-sni" })
+      local s = pg_insert(cn, "services", { id = uuid(), name = "before-service" })
+      pg_insert(cn, "routes", { id = uuid(), service_id = s.id })
+      pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true })
+
       -- kong migrations up
       assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
-
-      local res = assert(cn:query(fmt([[
-        INSERT INTO upstreams(id, name, slots)
-        VALUES ('%s', 'test-upstream', 1);
-      ]], utils.uuid())))
-      assert.same({ affected_rows = 1 }, res)
 
       -- MIGRATING
       -- check default workspace exists and get its id
@@ -175,16 +217,73 @@ describe("#db migration core/009_200_to_210 spec", function()
       assert.equals(1, #res)
       assert.equals("default", res[1].name)
       assert.truthy(utils.is_valid_uuid(res[1].id))
-
       local default_ws_id = res[1].id
 
-      assert_pg_has_fkey(cn, "upstreams", "ws_id")
-      local res = assert(cn:query([[
-        SELECT * FROM upstreams;
-      ]]))
-      assert.same(1, #res)
-      assert.equals("test-upstream", res[1].name)
-      assert.equals(default_ws_id, res[1].ws_id)
+      -- ensure that the entities created by the old node get the default ws_id
+      local u = assert(cn:query("SELECT * FROM upstreams"))[1]
+      local t = assert(cn:query("SELECT * FROM targets"))[1]
+      local c = assert(cn:query("SELECT * FROM consumers"))[1]
+      local cc = assert(cn:query("SELECT * FROM certificates"))[1]
+      local sni = assert(cn:query("SELECT * FROM snis"))[1]
+      local s = assert(cn:query("SELECT * FROM services"))[1]
+      local r = assert(cn:query("SELECT * FROM routes"))[1]
+      local p = assert(cn:query("SELECT * FROM plugins"))[1]
+      assert.equals(default_ws_id, u.ws_id)
+      assert.equals(default_ws_id, t.ws_id)
+      assert.equals(default_ws_id, c.ws_id)
+      assert.equals(default_ws_id, cc.ws_id)
+      assert.equals(default_ws_id, sni.ws_id)
+      assert.equals(default_ws_id, s.ws_id)
+      assert.equals(default_ws_id, r.ws_id)
+      assert.equals(default_ws_id, p.ws_id)
+
+      -- create entities without specifying default ws_id.
+      -- it simulates an "old" kong node inserting entities
+      -- expect them to have a workspace id
+      local u = pg_insert(cn, "upstreams", { id = uuid(), name = 'old-migrating-upstream', slots = 1 })
+      local t = pg_insert(cn, "targets",   { id = uuid(), upstream_id = u.id, target = 'old-migrating-target', weight = 1 })
+      local c = pg_insert(cn, "consumers", { id = uuid(), username = "old-migrating-consumer" })
+      local cc = pg_insert(cn, "certificates", { id = uuid(), cert = "old-migrating-cert", key = "key" })
+      local sni = pg_insert(cn, "snis", { id = uuid(), certificate_id = cc.id, name = "old-migrating-sni" })
+      local s = pg_insert(cn, "services", { id = uuid(), name = "old-migrating-service" })
+      local r = pg_insert(cn, "routes", { id = uuid(), service_id = s.id })
+      local p = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true })
+      assert.equals(default_ws_id, u.ws_id)
+      assert.equals(default_ws_id, t.ws_id)
+      assert.equals(default_ws_id, c.ws_id)
+      assert.equals(default_ws_id, cc.ws_id)
+      assert.equals(default_ws_id, sni.ws_id)
+      assert.equals(default_ws_id, s.ws_id)
+      assert.equals(default_ws_id, r.ws_id)
+      assert.equals(default_ws_id, p.ws_id)
+
+      -- create those entities specifying ws_id. Simulates a new kong node inserting entities
+      -- expect them to have ws_id as well
+      local u = pg_insert(cn, "upstreams", { id = uuid(), name = 'new-migrating-upstream', slots = 1, ws_id = default_ws_id })
+      local t = pg_insert(cn, "targets",   { id = uuid(), upstream_id = u.id, target = 'new-migrating-target', weight = 1, ws_id = default_ws_id })
+      local c = pg_insert(cn, "consumers", { id = uuid(), username = "new-migrating-consumer", ws_id = default_ws_id})
+      local cc = pg_insert(cn, "certificates", { id = uuid(), cert = "new-migrating-cert", key = "key", ws_id = default_ws_id })
+      local sni = pg_insert(cn, "snis", { id = uuid(), certificate_id = cc.id, name = "new-migrating-sni", ws_id = default_ws_id })
+      local s = pg_insert(cn, "services", { id = uuid(), name = "new-migrating-service", ws_id = default_ws_id })
+      local r = pg_insert(cn, "routes", { id = uuid(), service_id = s.id, ws_id = default_ws_id })
+      local p = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true, ws_id = default_ws_id })
+      assert.equals(default_ws_id, u.ws_id)
+      assert.equals(default_ws_id, t.ws_id)
+      assert.equals(default_ws_id, c.ws_id)
+      assert.equals(default_ws_id, cc.ws_id)
+      assert.equals(default_ws_id, sni.ws_id)
+      assert.equals(default_ws_id, s.ws_id)
+      assert.equals(default_ws_id, r.ws_id)
+      assert.equals(default_ws_id, p.ws_id)
+
+      -- kong migrations finish
+      assert(helpers.run_teardown_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
+
+      -- AFTER
+
+      -- TODO: check that ws_id is now null by default
+
+      -- TODO: check that composite cache keys (plugins) is updated
     end)
   end)
 

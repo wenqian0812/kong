@@ -66,7 +66,7 @@ local postgres = {
       local out = {}
       table.insert(out, render([[
 
-        -- Add ws_id to $(TABLE)
+        -- Add ws_id to $(TABLE), populating all of them with the default workspace id
         DO $$
         BEGIN
           EXECUTE format('ALTER TABLE IF EXISTS ONLY "$(TABLE)" ADD "ws_id" UUID REFERENCES "workspaces" ("id") DEFAULT %L',
@@ -76,15 +76,7 @@ local postgres = {
         END;
         $$;
 
-        -- Populate all ws_ids with the default workspace id
-        DO $$
-        BEGIN
-          EXECUTE format('UPDATE "$(TABLE)" SET "ws_id" = %L',
-                         (SELECT "id" FROM "workspaces" WHERE "name" = 'default'));
-        EXCEPTION WHEN DUPLICATE_COLUMN THEN
-          -- Do nothing, accept existing state
-        END;
-        $$;
+
 
       ]], { TABLE = table_name }))
 
@@ -172,7 +164,12 @@ local postgres = {
     ------------------------------------------------------------------------------
     -- Update keys to workspace-aware formats
     ws_update_keys = function(_, connector, table_name, unique_keys)
-      -- Postgres doesn't need this
+      -- Reset default value for ws_id once it is populated
+      assert(connector:query(render([[
+        ALTER TABLE IF EXISTS ONLY "$(TABLE)" ALTER "ws_id" SET DEFAULT NULL;
+      ]], {
+        TABLE = table_name,
+      })))
     end,
 
 
