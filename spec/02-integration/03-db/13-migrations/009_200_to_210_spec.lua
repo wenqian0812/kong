@@ -281,9 +281,94 @@ describe("#db migration core/009_200_to_210 spec", function()
 
       -- AFTER
 
-      -- TODO: check that ws_id is now null by default
+      -- create entities without specifying default ws_id.
+      -- at this point this should never happen any more (only "new nodes" create entities from now on, and they always should specify ws_id)
+      -- but this is a convenient way to test that the default has changed to ngx.null
+      local u = pg_insert(cn, "upstreams", { id = uuid(), name = 'old-after-upstream', slots = 1 })
+      local t = pg_insert(cn, "targets",   { id = uuid(), upstream_id = u.id, target = 'old-after-target', weight = 1 })
+      local c = pg_insert(cn, "consumers", { id = uuid(), username = "old-after-consumer" })
+      local cc = pg_insert(cn, "certificates", { id = uuid(), cert = "old-after-cert", key = "key" })
+      local sni = pg_insert(cn, "snis", { id = uuid(), certificate_id = cc.id, name = "old-after-sni" })
+      local s = pg_insert(cn, "services", { id = uuid(), name = "old-after-service" })
+      local r = pg_insert(cn, "routes", { id = uuid(), service_id = s.id })
+      local p = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true })
+      assert.equals(ngx.null, u.ws_id)
+      assert.equals(ngx.null, t.ws_id)
+      assert.equals(ngx.null, c.ws_id)
+      assert.equals(ngx.null, cc.ws_id)
+      assert.equals(ngx.null, sni.ws_id)
+      assert.equals(ngx.null, s.ws_id)
+      assert.equals(ngx.null, r.ws_id)
+      assert.equals(ngx.null, p.ws_id)
 
-      -- TODO: check that composite cache keys (plugins) is updated
+      -- create those entities specifying ws_id, simulating a new kong node inserting entities
+      -- expect them to have ws_id as well
+      local u = pg_insert(cn, "upstreams", { id = uuid(), name = 'new-after-upstream', slots = 1, ws_id = default_ws_id })
+      local t = pg_insert(cn, "targets",   { id = uuid(), upstream_id = u.id, target = 'new-after-target', weight = 1, ws_id = default_ws_id })
+      local c = pg_insert(cn, "consumers", { id = uuid(), username = "new-after-consumer", ws_id = default_ws_id})
+      local cc = pg_insert(cn, "certificates", { id = uuid(), cert = "new-after-cert", key = "key", ws_id = default_ws_id })
+      local sni = pg_insert(cn, "snis", { id = uuid(), certificate_id = cc.id, name = "new-after-sni", ws_id = default_ws_id })
+      local s = pg_insert(cn, "services", { id = uuid(), name = "new-after-service", ws_id = default_ws_id })
+      local r = pg_insert(cn, "routes", { id = uuid(), service_id = s.id, ws_id = default_ws_id })
+      local p = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true, ws_id = default_ws_id })
+      assert.equals(default_ws_id, u.ws_id)
+      assert.equals(default_ws_id, t.ws_id)
+      assert.equals(default_ws_id, c.ws_id)
+      assert.equals(default_ws_id, cc.ws_id)
+      assert.equals(default_ws_id, sni.ws_id)
+      assert.equals(default_ws_id, s.ws_id)
+      assert.equals(default_ws_id, r.ws_id)
+      assert.equals(default_ws_id, p.ws_id)
+    end)
+
+    it("correctly migrates plugins composite keys", function()
+      -- Assumption on this test: old nodes plugin cache keys will always end in ":"
+      -- This has been checked by visually inspecting the call to cache_key, which uses 4 params at most:
+      --   https://github.com/Kong/kong/blob/2.0.2/kong/runloop/plugins_iterator.lua#L92-L95
+      -- And the implementation of cache_key which concatenates 5 parameters:
+      --   https://github.com/Kong/kong/blob/2.0.2/kong/db/dao/init.lua#L1175
+      local cn = db.connector
+      local s = pg_insert(cn, "services", { id = uuid(), name = "before-srv" })
+      local p1 = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true, cache_key="before-cache-key:"})
+      assert.same("before-cache-key:", p1.cache_key)
+
+      -- kong migrations up
+      assert(helpers.run_up_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
+
+      -- MIGRATING
+      -- get default ws_id (tested further above)
+      local res = assert(cn:query("SELECT * FROM workspaces"))
+      local default_ws_id = assert(res[1].id)
+
+      -- simulate an old node creating a service and plugin
+      local s = pg_insert(cn, "services", { id = uuid(), name = "old-migrating-srv" })
+      local p2 = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true, cache_key="old-migrating-cache-key:"})
+      assert.same("old-migrating-cache-key:", p2.cache_key)
+
+      -- simulate a new node creating a service and plugin.
+      -- The plugin cache key is expected to already include ws_id
+      -- and it is expected to not end in ":"
+      local s = pg_insert(cn, "services", { id = uuid(), name = "new-migrating-srv" })
+      local p3 = pg_insert(cn, "plugins", { id = uuid(), name="key-auth", service_id = s.id, config="{}", enabled = true, cache_key="new-migrating-cache-key:" .. default_ws_id})
+      assert.same("new-migrating-cache-key:" .. default_ws_id, p3.cache_key)
+
+      -- kong migrations teardown
+      assert(helpers.run_teardown_migration(db, "core", "kong.db.migrations.core", "009_200_to_210"))
+
+      -- AFTER
+
+      -- the before plugin cache has been updated with ws_id
+      local res = assert(cn:query(fmt("SELECT * FROM plugins WHERE cache_key = 'before-cache-key::%s';", default_ws_id)))
+
+      assert.same(p1.id, res[1].id)
+
+      -- the old-migrating cache has been updated with ws_id
+      local res = assert(cn:query(fmt("SELECT * FROM plugins WHERE cache_key = 'old-migrating-cache-key::%s';", default_ws_id)))
+      assert.same(p2.id, res[1].id)
+
+      -- the new-migrating cache remains the same (ws_id was not added twice)
+      local res = assert(cn:query(fmt("SELECT * FROM plugins WHERE cache_key = 'new-migrating-cache-key:%s';", default_ws_id)))
+      assert.same(p3.id, res[1].id)
     end)
   end)
 
