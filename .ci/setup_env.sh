@@ -110,6 +110,26 @@ if [[ "$TEST_SUITE" =~ integration|dbless|plugins ]]; then
   docker run -d --name grpcbin -p 15002:9000 -p 15003:9001 moul/grpcbin
 fi
 
+# -----------------------------------------------------------------
+# TODO: Remove this
+# install lua-resty-dns-client from sources
+# -----------------------------------------------------------------
+luarocks install lua-resty-xxhash
+
+DNS_CLIENT_DOWNLOAD=$DOWNLOAD_ROOT/lua-resty-dns-client
+DNS_CLIENT_BRANCH=feat/no_tgt_history_consistent_hashing
+if [ ! -d $DNS_CLIENT_DOWNLOAD ]; then
+  git clone -b $DNS_CLIENT_BRANCH https://github.com/Kong/lua-resty-dns-client $DNS_CLIENT_DOWNLOAD
+else
+  pushd $DNS_CLIENT_DOWNLOAD
+    git fetch
+    git checkout $DNS_CLIENT_BRANCH
+  popd
+fi
+pushd $DNS_CLIENT_DOWNLOAD
+  luarocks make
+popd
+
 nginx -V
 resty -V
 luarocks --version

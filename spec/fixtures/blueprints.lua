@@ -18,6 +18,7 @@ end
 function Blueprint:insert(overrides, options)
   local entity, err = self.dao:insert(self:build(overrides), options)
   if err then
+    print("error: ", err)
     error(err, 2)
   end
   return entity
