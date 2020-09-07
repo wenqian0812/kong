@@ -1244,14 +1244,10 @@ return {
       -- At this point, the router and `balancer_setup_stage1` have been
       -- executed; detect requests that need to be redirected from `proxy_pass`
       -- to `grpc_pass`. After redirection, this function will return early
-      if service and var.kong_proxy_mode == "http" then
-        if service.protocol == "grpc" then
-          return ngx.exec("@grpc")
-        end
-
-        if service.protocol == "grpcs" then
-          return ngx.exec("@grpcs")
-        end
+      if service and var.kong_proxy_mode == "http"
+      and (service.protocol == "grpc" or service.protocol == "grpcs")
+      then
+        return ngx.exec("@grpc")
       end
     end,
     -- Only executed if the `router` module found a route and allows nginx to proxy it.
