@@ -1,6 +1,7 @@
 local conf_loader = require "kong.conf_loader"
 local helpers = require "spec.helpers"
 local tablex = require "pl.tablex"
+local pl_path = require "pl.path"
 
 
 local function search_directive(tbl, directive_name, directive_value)
@@ -740,6 +741,16 @@ describe("Configuration loader", function()
           assert.equal(1, #errors)
           assert.contains("lua_ssl_trusted_certificate: no such file at /path/cert.pem", errors)
           assert.is_nil(conf)
+        end)
+        it("accepts several CA certs in lua_ssl_trusted_certificate", function()
+          local conf, _, errors = conf_loader(nil, {
+            lua_ssl_trusted_certificate = "spec/fixtures/certs.pem,spec/fixtures/certs2.pem",
+          })
+          assert.is_nil(errors)
+          assert.same({
+            pl_path.abspath("spec/fixtures/certs.pem"),
+            pl_path.abspath("spec/fixtures/certs2.pem"),
+          }, conf.lua_ssl_trusted_certificate)
         end)
         it("resolves SSL cert/key to absolute path", function()
           local conf, err = conf_loader(nil, {

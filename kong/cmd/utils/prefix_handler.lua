@@ -168,6 +168,13 @@ local function compile_conf(kong_config, conf_template)
     end
   end
 
+  if type(kong_config.lua_ssl_trusted_certificate) == "table" then
+    -- FIXME instead of using the first value of this, we should be
+    -- concatenating all the certs onto a unified file, and using that
+    -- as lua_ssl_trusted_certificate
+    kong_config.lua_ssl_trusted_certificate = kong_config.lua_ssl_trusted_certificate[1]
+  end
+
   compile_env = pl_tablex.merge(compile_env, kong_config, true) -- union
   compile_env.dns_resolver = table.concat(compile_env.dns_resolver, " ")
   compile_env.lua_package_path = (compile_env.lua_package_path or "") .. ";" ..

@@ -915,6 +915,8 @@ local _M = {}
 
 
 function _M.new(kong_config)
+  local lstc = kong_config.lua_ssl_trusted_certificate
+
   local config = {
     host        = kong_config.pg_host,
     port        = kong_config.pg_port,
@@ -925,7 +927,7 @@ function _M.new(kong_config)
     schema      = kong_config.pg_schema or "",
     ssl         = kong_config.pg_ssl,
     ssl_verify  = kong_config.pg_ssl_verify,
-    cafile      = kong_config.lua_ssl_trusted_certificate,
+    cafile      = lstc and lstc[1],
     sem_max     = kong_config.pg_max_concurrent_queries or 0,
     sem_timeout = (kong_config.pg_semaphore_timeout or 60000) / 1000,
   }
