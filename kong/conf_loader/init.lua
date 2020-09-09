@@ -272,6 +272,8 @@ local CONF_INFERENCES = {
   cluster_listen = { typ = "array" },
   db_update_frequency = {  typ = "number"  },
   db_update_propagation = {  typ = "number"  },
+  redis_port = { typ = "number" },
+  reids_uri = {typ = "string"},
   db_cache_ttl = {  typ = "number"  },
   db_cache_neg_ttl = {  typ = "number"  },
   db_resurrect_ttl = {  typ = "number"  },

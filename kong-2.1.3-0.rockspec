@@ -39,6 +39,7 @@ dependencies = {
   "lua-resty-openssl == 0.6.2",
   "lua-resty-counter == 0.2.1",
   "lua-resty-ipmatcher == 0.6",
+  "redis-lua == 2.0.4",
   -- external Kong plugins
   "kong-plugin-azure-functions ~> 0.4",
   "kong-plugin-zipkin ~> 1.1",
@@ -50,7 +51,7 @@ dependencies = {
   "kong-plugin-aws-lambda ~> 3.4",
   "kong-plugin-acme ~> 0.2",
   "kong-plugin-grpc-web ~> 0.1",
-  "kong-plugin-grpc-gateway ~> 0.1",
+  "kong-plugin-grpc-gateway ~> 0.1", 
 }
 build = {
   type = "builtin",

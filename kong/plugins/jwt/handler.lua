@@ -1,6 +1,11 @@
 local constants = require "kong.constants"
 local jwt_decoder = require "kong.plugins.jwt.jwt_parser"
+local conf_loader = require "kong.conf_loader"
+local redis = require "redis"
 
+local tmp_config = conf_loader()
+local redis_uri = tmp_config.redis_uri
+local redis_port = tmp_config.redis_port
 
 local fmt = string.format
 local kong = kong
@@ -149,6 +154,17 @@ local function do_authentication(conf)
 
   local claims = jwt.claims
   local header = jwt.header
+
+  local client = redis.connect(redis_uri, redis_port)
+  local response = client:ping()
+  local user_redis_time = client:get(header['uid'])
+  if user_redis_time == nil then
+    return false, { status = 401, message = "the token not available,please reauthenticate" }
+  elseif header['$_time'] == '' then
+    return false, { status = 401, message = "the user haven\'t some authorization, please contact your administrator" }
+  elseif tostring(header['$_time']) ~= tostring(user_redis_time) then
+    return false, { status = 401, message = "the user\'auth is updated, please reauthenticate" }
+  end
 
   local jwt_secret_key = claims[conf.key_claim_name] or header[conf.key_claim_name]
   if not jwt_secret_key then
